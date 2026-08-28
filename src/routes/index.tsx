@@ -221,7 +221,7 @@ function LandingPage() {
           <div className="text-center sm:text-left">
             <p>© {new Date().getFullYear()} AutoClip AI — processed locally, always.</p>
             <p className="mt-1 text-xs">
-              Developed by <span className="font-medium text-foreground">SANN404 FORUM GROUP</span>
+              Developed by <span className="font-medium text-foreground">SAJIN401</span>
             </p>
           </div>
 
