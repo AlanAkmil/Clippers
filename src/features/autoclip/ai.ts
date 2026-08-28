@@ -54,6 +54,7 @@ export async function generateAiHighlights(
   duration: number,
   clipLength: number,
   clipCount: number,
+  language?: string | null,
 ): Promise<AiHighlightSuggestion[]> {
-  return scoreHighlightsAi({ data: { cues, duration, clipLength, clipCount } });
+  return scoreHighlightsAi({ data: { cues, duration, clipLength, clipCount, language } });
 }
