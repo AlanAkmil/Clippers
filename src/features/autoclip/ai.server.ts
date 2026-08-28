@@ -5,7 +5,7 @@ import type { AiHighlightSuggestion, AiTranscribeResult, SubtitleCue } from "./t
 // reaches the browser. Set GROQ_API_KEY in your hosting provider's env vars.
 const GROQ_BASE = "https://api.groq.com/openai/v1";
 const TRANSCRIBE_MODEL = "whisper-large-v3-turbo";
-const SCORE_MODEL = "llama-3.3-70b-versatile";
+const SCORE_MODEL = "openai/gpt-oss-120b";
 const MAX_AUDIO_BYTES = 24 * 1024 * 1024; // Groq free-tier file size limit is 25MB
 
 function requireApiKey(): string {
