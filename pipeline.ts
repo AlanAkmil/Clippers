@@ -324,8 +324,13 @@ function buildArgs({
     subtitleFrames.forEach((frame, position) => {
       const idx = subtitleIndices[position];
       const label = `vsub${position}`;
+      // The base video's filtergraph timeline still includes the seek preroll
+      // (it's only trimmed away by the output-side `-ss fine` below, which runs
+      // after this filter_complex), so cue times need the same offset here.
+      const cueStart = frame.start + fine;
+      const cueEnd = frame.end + fine;
       parts.push(
-        `[${current}][${idx}:v]overlay=0:0:enable='between(t,${frame.start.toFixed(3)},${frame.end.toFixed(3)})'[${label}]`,
+        `[${current}][${idx}:v]overlay=0:0:enable='between(t,${cueStart.toFixed(3)},${cueEnd.toFixed(3)})'[${label}]`,
       );
       current = label;
     });
