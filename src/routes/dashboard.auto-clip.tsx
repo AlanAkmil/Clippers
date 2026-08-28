@@ -112,7 +112,6 @@ function AutoClipPage() {
     cues,
     transcriptName,
     aiSuggestions,
-    logs,
   } = store;
   const [url, setUrl] = useState("");
   const [urlBusy, setUrlBusy] = useState(false);
@@ -717,16 +716,6 @@ function AutoClipPage() {
                 ),
               )}
             </ul>
-            {logs.length > 0 ? (
-              <details className="mt-4 rounded-xl border border-border/60 bg-secondary/30 p-2 text-xs">
-                <summary className="cursor-pointer select-none text-muted-foreground">
-                  Debug log ({logs.length}) — buka & screenshot kalau ada yang error
-                </summary>
-                <pre className="mt-2 max-h-48 overflow-y-auto whitespace-pre-wrap break-all font-mono text-[10px] leading-relaxed text-muted-foreground">
-                  {logs.join("\n")}
-                </pre>
-              </details>
-            ) : null}
           </div>
 
           <div className="rounded-3xl glass p-5">
