@@ -26,7 +26,7 @@ import { useAutoClipStore } from "@/features/autoclip/store";
 import { fetchYouTubePreview, parseYouTubeId, readVideoMeta } from "@/features/autoclip/source";
 import { parseSubtitles } from "@/features/autoclip/subtitles";
 import { isCancellation, runPipeline } from "@/features/autoclip/pipeline";
-import { generateAiHighlights, generateAiTranscript } from "@/features/autoclip/ai";
+import { generateAiHighlights, generateAiTranscript, translateCues } from "@/features/autoclip/ai";
 import { downloadBlob, saveRun } from "@/features/autoclip/useLibrary";
 import {
   STAGE_LABEL,
@@ -121,6 +121,7 @@ function AutoClipPage() {
   const [aiBusy, setAiBusy] = useState(false);
   const [aiStatus, setAiStatus] = useState<string | null>(null);
   const [aiLanguage, setAiLanguage] = useState("");
+  const [translateTo, setTranslateTo] = useState("");
   const cancelRef = useRef(false);
   const running = stage !== "idle" && stage !== "done" && stage !== "error";
 
@@ -155,13 +156,24 @@ function AutoClipPage() {
       if (suggestions.length > 0) {
         toast.success(`AI nemu ${suggestions.length} momen berpotensi viral`);
       }
+
+      if (translateTo && translateTo !== language) {
+        setAiStatus(`Menerjemahkan subtitle ke ${AI_LANGUAGES.find((l) => l.value === translateTo)?.label ?? translateTo}…`);
+        const translated = await translateCues(aiCues, translateTo, (done, total) => {
+          setAiStatus(`Menerjemahkan subtitle… (${done}/${total})`);
+        });
+        useAutoClipStore
+          .getState()
+          .setCues(translated, `AI transcript (${AI_LANGUAGES.find((l) => l.value === translateTo)?.label ?? translateTo})`);
+        toast.success("Subtitle udah diterjemahkan");
+      }
     } catch (cause) {
       toast.error(cause instanceof Error ? cause.message : "AI assist gagal.");
     } finally {
       setAiBusy(false);
       setAiStatus(null);
     }
-  }, [file, source?.duration, config.clipLength, config.clipCount, aiLanguage]);
+  }, [file, source?.duration, config.clipLength, config.clipCount, aiLanguage, translateTo]);
 
   useEffect(() => () => useAutoClipStore.getState().resetRun(), []);
 
@@ -466,6 +478,24 @@ function AutoClipPage() {
                   </SelectTrigger>
                   <SelectContent>
                     {AI_LANGUAGES.map((lang) => (
+                      <SelectItem key={lang.value} value={lang.value}>
+                        {lang.label}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+              <div className="flex items-center justify-between gap-4">
+                <Label htmlFor="ai-translate" className="text-xs text-muted-foreground">
+                  Terjemahkan subtitle ke
+                </Label>
+                <Select value={translateTo || "none"} onValueChange={(v) => setTranslateTo(v === "none" ? "" : v)}>
+                  <SelectTrigger id="ai-translate" className="h-8 w-40 rounded-full text-xs">
+                    <SelectValue placeholder="Bahasa asli" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="none">Bahasa asli (gak diterjemahin)</SelectItem>
+                    {AI_LANGUAGES.filter((l) => l.value !== "auto").map((lang) => (
                       <SelectItem key={lang.value} value={lang.value}>
                         {lang.label}
                       </SelectItem>
