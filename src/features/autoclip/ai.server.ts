@@ -81,13 +81,10 @@ export const scoreHighlightsAi = createServerFn({ method: "POST" })
     const { cues, duration, clipLength, clipCount } = data;
     if (cues.length === 0) return [];
 
-    const transcript = cues
-      .map((cue) => `[${formatTime(cue.start)}-${formatTime(cue.end)}] ${cue.text}`)
-      .join("\n")
-      .slice(0, 24000);
+    const transcript = buildTranscriptSample(cues, 5200);
 
     const prompt = [
-      `Ini transkrip video berdurasi ${Math.round(duration)} detik, dengan timestamp per baris:`,
+      `Ini transkrip video berdurasi ${Math.round(duration)} detik, dengan timestamp per baris (sebagian baris di-sample merata biar muat, tapi mewakili seluruh durasi video):`,
       transcript,
       "",
       `Pilih ${clipCount} rentang waktu paling berpotensi VIRAL untuk dijadikan short clip (durasi tiap klip sekitar ${clipLength} detik, boleh sedikit meleset).`,
@@ -106,6 +103,7 @@ export const scoreHighlightsAi = createServerFn({ method: "POST" })
       body: JSON.stringify({
         model: SCORE_MODEL,
         temperature: 0.3,
+        max_completion_tokens: 1500,
         messages: [
           {
             role: "system",
@@ -164,6 +162,25 @@ function parseSuggestions(content: string): AiHighlightSuggestion[] {
 function clampScore(value: number): number {
   if (!Number.isFinite(value)) return 0;
   return Math.min(100, Math.max(0, value));
+}
+
+function buildTranscriptSample(cues: SubtitleCue[], maxChars: number): string {
+  const lines = cues.map((cue) => `[${formatTime(cue.start)}-${formatTime(cue.end)}] ${cue.text}`);
+  const joined = lines.join("\n");
+  if (joined.length <= maxChars) return joined;
+
+  // Free-tier Groq caps tokens per request. Instead of truncating from the start
+  // (which would blind the AI to the second half of the video), sample lines
+  // evenly across the whole timeline so it still sees the beginning, middle, and end.
+  const avgLineLen = joined.length / lines.length;
+  const targetCount = Math.max(20, Math.floor(maxChars / (avgLineLen + 1)));
+  const stride = lines.length / targetCount;
+  const sampled: string[] = [];
+  for (let i = 0; i < targetCount; i++) {
+    const idx = Math.min(lines.length - 1, Math.floor(i * stride));
+    sampled.push(lines[idx]);
+  }
+  return sampled.join("\n");
 }
 
 function formatTime(seconds: number): string {
