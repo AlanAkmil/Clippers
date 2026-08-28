@@ -16,6 +16,7 @@ export interface AiTranscribeCallbacks {
 export async function generateAiTranscript(
   file: Blob,
   callbacks: AiTranscribeCallbacks = {},
+  languageHint?: string,
 ): Promise<AiTranscribeResult> {
   callbacks.onStage?.("Menyiapkan engine video…");
   const engine = await getEngine();
@@ -45,6 +46,7 @@ export async function generateAiTranscript(
   callbacks.onStage?.("Mengirim ke AI buat transkrip…");
   const form = new FormData();
   form.append("audio", audioBlob, "audio.ogg");
+  if (languageHint) form.append("language", languageHint);
   return transcribeAudioAi({ data: form });
 }
 
