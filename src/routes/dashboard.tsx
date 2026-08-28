@@ -189,7 +189,7 @@ function SidebarContent({ onNavigate }: { onNavigate: () => void }) {
           </p>
         </div>
         <p className="px-2 text-[11px] leading-relaxed text-muted-foreground">
-          Developed by <span className="font-medium text-foreground">SANN404 FORUM GROUP</span>
+          Developed by <span className="font-medium text-foreground">SAJIN401</span>
         </p>
       </div>
 
