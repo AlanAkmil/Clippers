@@ -205,10 +205,7 @@ export async function runPipeline(input: PipelineInput, callbacks: PipelineCallb
       } catch (error) {
         if (frames.length > 0) {
           subtitleFailed = true;
-          const detail = error instanceof Error ? error.message : String(error);
-          callbacks.onWarning?.(
-            `Subtitle burn-in gagal, klip diexport tanpa subtitle. Detail: ${detail.slice(0, 180)}`,
-          );
+          callbacks.onWarning?.("Subtitle burn-in gagal — klip diexport tanpa subtitle.");
           continue;
         }
         throw error;
