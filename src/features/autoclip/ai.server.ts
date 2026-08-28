@@ -167,6 +167,82 @@ function parseSuggestions(content: string): AiHighlightSuggestion[] {
   }
 }
 
+export interface TranslateCuesInput {
+  cues: SubtitleCue[];
+  targetLanguage: string;
+}
+
+/** Translates a batch of subtitle lines, keeping the same count/order/timing. */
+export const translateCuesAi = createServerFn({ method: "POST" })
+  .validator((data: TranslateCuesInput) => data)
+  .handler(async ({ data }): Promise<SubtitleCue[]> => {
+    const apiKey = requireApiKey();
+    const { cues, targetLanguage } = data;
+    if (cues.length === 0) return [];
+
+    const targetName = languageName(targetLanguage);
+    const texts = cues.map((cue) => cue.text);
+
+    const prompt = [
+      `Terjemahkan tiap baris teks berikut ke ${targetName}. Ini baris-baris subtitle video (gaya bahasa lisan/percakapan), jadi terjemahannya harus singkat & natural, bukan terjemahan harfiah kaku.`,
+      "Balas HANYA JSON array of strings, tanpa markdown/teks lain. Jumlah & urutan elemen HARUS PERSIS sama dengan input — satu terjemahan per baris input, jangan digabung atau dipecah.",
+      "Input:",
+      JSON.stringify(texts),
+    ].join("\n");
+
+    const response = await fetch(`${GROQ_BASE}/chat/completions`, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${apiKey}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        model: SCORE_MODEL,
+        temperature: 0.2,
+        max_completion_tokens: 2000,
+        messages: [
+          {
+            role: "system",
+            content:
+              "Kamu penerjemah subtitle profesional. Selalu balas JSON array of strings saja, tanpa markdown atau penjelasan tambahan.",
+          },
+          { role: "user", content: prompt },
+        ],
+      }),
+    });
+
+    if (!response.ok) {
+      const detail = await response.text().catch(() => "");
+      throw new Error(`Groq translate gagal (${response.status}): ${detail.slice(0, 200)}`);
+    }
+
+    const json = (await response.json()) as { choices?: Array<{ message?: { content?: string } }> };
+    const content = json.choices?.[0]?.message?.content ?? "[]";
+    const translated = parseStringArray(content);
+
+    return cues.map((cue, i) => ({
+      start: cue.start,
+      end: cue.end,
+      text: translated[i]?.trim() || cue.text,
+    }));
+  });
+
+function parseStringArray(content: string): string[] {
+  const cleaned = content
+    .trim()
+    .replace(/^```(json)?/i, "")
+    .replace(/```$/, "")
+    .trim();
+  try {
+    const raw = JSON.parse(cleaned) as unknown;
+    const list = Array.isArray(raw) ? raw : (raw as { translations?: unknown }).translations;
+    if (!Array.isArray(list)) return [];
+    return list.map((item) => (typeof item === "string" ? item : String(item)));
+  } catch {
+    return [];
+  }
+}
+
 function clampScore(value: number): number {
   if (!Number.isFinite(value)) return 0;
   return Math.min(100, Math.max(0, value));
