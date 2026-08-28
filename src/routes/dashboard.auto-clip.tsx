@@ -8,6 +8,7 @@ import { Switch } from "@/components/ui/switch";
 import { Slider } from "@/components/ui/slider";
 import { Badge } from "@/components/ui/badge";
 import { Progress } from "@/components/ui/progress";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import {
   AlertTriangle,
   Download,
@@ -59,6 +60,44 @@ const ASPECTS: AspectRatio[] = ["9:16", "1:1", "16:9"];
 const FORMATS: ExportFormat[] = ["mp4", "webm", "gif"];
 const POSITIONS: WatermarkPosition[] = ["top-left", "top-right", "bottom-left", "bottom-right", "center"];
 
+// Whisper (whisper-large-v3-turbo) supports ~99 languages; these are the ones
+// worth surfacing as quick picks. "Auto-deteksi" covers everything else too —
+// this list only hints the language to improve accuracy, it doesn't limit it.
+const AI_LANGUAGES = [
+  { value: "auto", label: "Auto-deteksi" },
+  { value: "id", label: "Indonesia" },
+  { value: "en", label: "English" },
+  { value: "ms", label: "Melayu" },
+  { value: "jv", label: "Jawa" },
+  { value: "su", label: "Sunda" },
+  { value: "zh", label: "中文 (Chinese)" },
+  { value: "ja", label: "日本語 (Japanese)" },
+  { value: "ko", label: "한국어 (Korean)" },
+  { value: "th", label: "ไทย (Thai)" },
+  { value: "vi", label: "Tiếng Việt" },
+  { value: "tl", label: "Filipino" },
+  { value: "hi", label: "हिन्दी (Hindi)" },
+  { value: "ur", label: "اردو (Urdu)" },
+  { value: "bn", label: "বাংলা (Bengali)" },
+  { value: "ta", label: "தமிழ் (Tamil)" },
+  { value: "ar", label: "العربية (Arabic)" },
+  { value: "fa", label: "فارسی (Persian)" },
+  { value: "tr", label: "Türkçe" },
+  { value: "ru", label: "Русский" },
+  { value: "uk", label: "Українська" },
+  { value: "he", label: "עברית (Hebrew)" },
+  { value: "de", label: "Deutsch" },
+  { value: "nl", label: "Nederlands" },
+  { value: "fr", label: "Français" },
+  { value: "es", label: "Español" },
+  { value: "pt", label: "Português" },
+  { value: "it", label: "Italiano" },
+  { value: "pl", label: "Polski" },
+  { value: "sv", label: "Svenska" },
+  { value: "el", label: "Ελληνικά (Greek)" },
+  { value: "sw", label: "Kiswahili" },
+];
+
 function AutoClipPage() {
   const store = useAutoClipStore();
   const {
@@ -81,6 +120,7 @@ function AutoClipPage() {
   const [dragging, setDragging] = useState(false);
   const [aiBusy, setAiBusy] = useState(false);
   const [aiStatus, setAiStatus] = useState<string | null>(null);
+  const [aiLanguage, setAiLanguage] = useState("");
   const cancelRef = useRef(false);
   const running = stage !== "idle" && stage !== "done" && stage !== "error";
 
@@ -91,9 +131,11 @@ function AutoClipPage() {
     }
     setAiBusy(true);
     try {
-      const { cues: aiCues, language } = await generateAiTranscript(file, {
-        onStage: (label) => setAiStatus(label),
-      });
+      const { cues: aiCues, language } = await generateAiTranscript(
+        file,
+        { onStage: (label) => setAiStatus(label) },
+        aiLanguage || undefined,
+      );
       if (aiCues.length === 0) {
         toast.error("AI nggak nemu ucapan di audio ini — coba upload subtitle manual.");
         return;
@@ -119,7 +161,7 @@ function AutoClipPage() {
       setAiBusy(false);
       setAiStatus(null);
     }
-  }, [file, source?.duration, config.clipLength, config.clipCount]);
+  }, [file, source?.duration, config.clipLength, config.clipCount, aiLanguage]);
 
   useEffect(() => () => useAutoClipStore.getState().resetRun(), []);
 
@@ -414,6 +456,23 @@ function AutoClipPage() {
                 </Button>
               </div>
               {aiStatus ? <p className="text-xs text-muted-foreground">{aiStatus}</p> : null}
+              <div className="flex items-center justify-between gap-4">
+                <Label htmlFor="ai-lang" className="text-xs text-muted-foreground">
+                  Bahasa audio (bantu Whisper lebih akurat)
+                </Label>
+                <Select value={aiLanguage || "auto"} onValueChange={(v) => setAiLanguage(v === "auto" ? "" : v)}>
+                  <SelectTrigger id="ai-lang" className="h-8 w-40 rounded-full text-xs">
+                    <SelectValue placeholder="Auto-deteksi" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {AI_LANGUAGES.map((lang) => (
+                      <SelectItem key={lang.value} value={lang.value}>
+                        {lang.label}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
               {aiSuggestions.length > 0 ? (
                 <Badge variant="secondary" className="w-fit rounded-full">
                   {aiSuggestions.length} momen dari AI siap dipakai
