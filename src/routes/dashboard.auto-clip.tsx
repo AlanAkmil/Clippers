@@ -107,6 +107,7 @@ function AutoClipPage() {
         source?.duration ?? 0,
         config.clipLength,
         config.clipCount,
+        language,
       );
       useAutoClipStore.getState().setAiSuggestions(suggestions);
       if (suggestions.length > 0) {
