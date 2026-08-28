@@ -1,8 +1,9 @@
 import { getEngine } from "./engine";
-import { scoreHighlightsAi, transcribeAudioAi } from "./ai.server";
-import type { AiHighlightSuggestion, AiTranscribeResult } from "./types";
+import { scoreHighlightsAi, transcribeAudioAi, translateCuesAi } from "./ai.server";
+import type { AiHighlightSuggestion, AiTranscribeResult, SubtitleCue } from "./types";
 
 const MAX_AUDIO_BYTES = 24 * 1024 * 1024;
+const TRANSLATE_BATCH_SIZE = 30;
 
 export interface AiTranscribeCallbacks {
   onStage?: (label: string) => void;
@@ -59,4 +60,30 @@ export async function generateAiHighlights(
   language?: string | null,
 ): Promise<AiHighlightSuggestion[]> {
   return scoreHighlightsAi({ data: { cues, duration, clipLength, clipCount, language } });
+}
+
+/**
+ * Translates every cue's text to `targetLanguage`, batched to stay under
+ * Groq's free-tier tokens-per-minute limit. Timing is untouched — only text changes.
+ */
+export async function translateCues(
+  cues: SubtitleCue[],
+  targetLanguage: string,
+  onProgress?: (done: number, total: number) => void,
+): Promise<SubtitleCue[]> {
+  const results: SubtitleCue[] = [];
+  for (let i = 0; i < cues.length; i += TRANSLATE_BATCH_SIZE) {
+    const batch = cues.slice(i, i + TRANSLATE_BATCH_SIZE);
+    const translated = await translateCuesAi({ data: { cues: batch, targetLanguage } });
+    results.push(...translated);
+    onProgress?.(results.length, cues.length);
+    if (i + TRANSLATE_BATCH_SIZE < cues.length) {
+      await sleep(400);
+    }
+  }
+  return results;
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
