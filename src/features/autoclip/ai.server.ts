@@ -32,12 +32,16 @@ export const transcribeAudioAi = createServerFn({ method: "POST" })
         `Audio ${(file.size / (1024 * 1024)).toFixed(1)}MB, kelebihan dari batas ~24MB. Potong videonya jadi lebih pendek atau upload subtitle manual.`,
       );
     }
+    const languageHint = data.get("language");
 
     const upstream = new FormData();
     upstream.append("file", file, "audio.ogg");
     upstream.append("model", TRANSCRIBE_MODEL);
     upstream.append("response_format", "verbose_json");
     upstream.append("timestamp_granularities[]", "segment");
+    if (typeof languageHint === "string" && languageHint) {
+      upstream.append("language", languageHint);
+    }
 
     const response = await fetch(`${GROQ_BASE}/audio/transcriptions`, {
       method: "POST",
