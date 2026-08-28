@@ -71,6 +71,9 @@ export interface AiScoreInput {
   duration: number;
   clipLength: number;
   clipCount: number;
+  /** Language the transcript is in (from Whisper's detection), so the AI's
+   * reasoning is written in that language instead of always Indonesian. */
+  language?: string | null;
 }
 
 /** Asks an LLM to read the transcript and pick the most "viral" windows. */
@@ -78,10 +81,11 @@ export const scoreHighlightsAi = createServerFn({ method: "POST" })
   .validator((data: AiScoreInput) => data)
   .handler(async ({ data }): Promise<AiHighlightSuggestion[]> => {
     const apiKey = requireApiKey();
-    const { cues, duration, clipLength, clipCount } = data;
+    const { cues, duration, clipLength, clipCount, language } = data;
     if (cues.length === 0) return [];
 
     const transcript = buildTranscriptSample(cues, 5200);
+    const reasonLanguage = language ? languageName(language) : "bahasa yang sama dengan transkrip di atas";
 
     const prompt = [
       `Ini transkrip video berdurasi ${Math.round(duration)} detik, dengan timestamp per baris (sebagian baris di-sample merata biar muat, tapi mewakili seluruh durasi video):`,
@@ -91,7 +95,7 @@ export const scoreHighlightsAi = createServerFn({ method: "POST" })
       "Prioritaskan: hook kuat di awal, momen emosional/lucu/mengejutkan, kutipan yang berdiri sendiri tanpa butuh konteks tambahan, curiosity gap.",
       "Klip tidak boleh saling tumpang tindih dan waktunya harus ada di dalam durasi video.",
       "Balas HANYA JSON array (tanpa markdown, tanpa teks lain) dengan format persis:",
-      `[{"start": <detik>, "end": <detik>, "score": <0-100>, "reason": "<alasan singkat 1 kalimat, dalam Bahasa Indonesia>"}]`,
+      `[{"start": <detik>, "end": <detik>, "score": <0-100>, "reason": "<alasan singkat 1 kalimat, ditulis dalam ${reasonLanguage}>"}]`,
     ].join("\n");
 
     const response = await fetch(`${GROQ_BASE}/chat/completions`, {
@@ -181,6 +185,33 @@ function buildTranscriptSample(cues: SubtitleCue[], maxChars: number): string {
     sampled.push(lines[idx]);
   }
   return sampled.join("\n");
+}
+
+const LANGUAGE_NAMES: Record<string, string> = {
+  id: "Bahasa Indonesia",
+  en: "English",
+  ja: "Japanese (日本語)",
+  ko: "Korean (한국어)",
+  zh: "Chinese (中文)",
+  es: "Spanish",
+  fr: "French",
+  de: "German",
+  ar: "Arabic",
+  hi: "Hindi",
+  pt: "Portuguese",
+  ru: "Russian",
+  vi: "Vietnamese",
+  th: "Thai",
+  tr: "Turkish",
+  ms: "Malay",
+  fil: "Filipino",
+  nl: "Dutch",
+  it: "Italian",
+};
+
+function languageName(code: string): string {
+  const key = code.toLowerCase();
+  return LANGUAGE_NAMES[key] ?? code;
 }
 
 function formatTime(seconds: number): string {
