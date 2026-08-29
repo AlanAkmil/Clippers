@@ -38,6 +38,13 @@ export function sliceCues(cues: SubtitleCue[], start: number, end: number): Subt
       start: Math.max(0, cue.start - start),
       end: Math.min(end - start, cue.end - start),
       text: cue.text,
+      words: cue.words
+        ?.filter((word) => word.end > start && word.start < end)
+        .map((word) => ({
+          text: word.text,
+          start: Math.max(0, word.start - start),
+          end: Math.min(end - start, word.end - start),
+        })),
     }));
 }
 
