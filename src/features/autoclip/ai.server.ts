@@ -1,5 +1,5 @@
 import { createServerFn } from "@tanstack/react-start";
-import type { AiHighlightSuggestion, AiTranscribeResult, SubtitleCue } from "./types";
+import type { AiHighlightSuggestion, AiTranscribeResult, SubtitleCue, SubtitleWord } from "./types";
 
 // These calls run on the server only (inside .handler), so the key never
 // reaches the browser. Set GROQ_API_KEY in your hosting provider's env vars.
@@ -39,6 +39,7 @@ export const transcribeAudioAi = createServerFn({ method: "POST" })
     upstream.append("model", TRANSCRIBE_MODEL);
     upstream.append("response_format", "verbose_json");
     upstream.append("timestamp_granularities[]", "segment");
+    upstream.append("timestamp_granularities[]", "word");
     if (typeof languageHint === "string" && languageHint) {
       upstream.append("language", languageHint);
     }
@@ -57,14 +58,19 @@ export const transcribeAudioAi = createServerFn({ method: "POST" })
     const json = (await response.json()) as {
       language?: string;
       segments?: Array<{ start: number; end: number; text: string }>;
+      words?: Array<{ word: string; start: number; end: number }>;
     };
 
+    const allWords = json.words ?? [];
     const cues: SubtitleCue[] = (json.segments ?? [])
-      .map((segment) => ({
-        start: segment.start,
-        end: segment.end,
-        text: segment.text.trim(),
-      }))
+      .map((segment) => {
+        const text = segment.text.trim();
+        const words: SubtitleWord[] = allWords
+          .filter((w) => w.start >= segment.start - 0.05 && w.start < segment.end)
+          .map((w) => ({ text: w.word.trim(), start: w.start, end: w.end }))
+          .filter((w) => w.text.length > 0);
+        return { start: segment.start, end: segment.end, text, words: words.length > 0 ? words : undefined };
+      })
       .filter((cue) => cue.text.length > 0);
 
     return { cues, language: json.language ?? null };
