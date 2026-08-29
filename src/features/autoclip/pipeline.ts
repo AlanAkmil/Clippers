@@ -171,10 +171,31 @@ export async function runPipeline(input: PipelineInput, callbacks: PipelineCallb
       for (let cueIndex = 0; cueIndex < clipCues.length; cueIndex += 1) {
         const cue = clipCues[cueIndex];
         if (!cue || cue.end <= cue.start) continue;
-        const png = await renderSubtitleFrame(cue.text, config.subtitle, width, height);
-        const fileName = `sub-${index}-${cueIndex}.png`;
-        await engine.writeFile(fileName, png);
-        subtitleFrames.push({ fileName, start: cue.start, end: cue.end });
+
+        const words = cue.words;
+        if (config.subtitle.highlightWords && words && words.length > 0) {
+          // Karaoke mode: one frame per word, each highlighting that word.
+          // A frame spans until the next word starts, so the highlight moves
+          // exactly when the next word is spoken (no gaps/flicker).
+          const wordTexts = words.map((w) => w.text);
+          for (let wordIndex = 0; wordIndex < words.length; wordIndex += 1) {
+            const word = words[wordIndex];
+            if (!word) continue;
+            const frameStart = wordIndex === 0 ? cue.start : Math.max(cue.start, word.start);
+            const nextWord = words[wordIndex + 1];
+            const frameEnd = nextWord ? Math.max(frameStart, Math.min(cue.end, nextWord.start)) : cue.end;
+            if (frameEnd <= frameStart) continue;
+            const png = await renderSubtitleFrame(cue.text, config.subtitle, width, height, wordTexts, wordIndex);
+            const fileName = `sub-${index}-${cueIndex}-${wordIndex}.png`;
+            await engine.writeFile(fileName, png);
+            subtitleFrames.push({ fileName, start: frameStart, end: frameEnd });
+          }
+        } else {
+          const png = await renderSubtitleFrame(cue.text, config.subtitle, width, height);
+          const fileName = `sub-${index}-${cueIndex}.png`;
+          await engine.writeFile(fileName, png);
+          subtitleFrames.push({ fileName, start: cue.start, end: cue.end });
+        }
       }
     }
 
