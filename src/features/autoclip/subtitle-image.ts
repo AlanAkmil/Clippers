@@ -1,6 +1,5 @@
 import type { SubtitleStyle } from "./types";
-
-const HIGHLIGHT_COLOR = "#ffd60a";
+import { getFontPreset, loadFontForCanvas } from "./fonts";
 
 /**
  * Renders one subtitle frame onto a transparent PNG sized exactly to the output
@@ -21,6 +20,10 @@ export async function renderSubtitleFrame(
   words?: string[],
   activeWordIndex?: number,
 ): Promise<Uint8Array> {
+  const preset = getFontPreset(style.fontFamily);
+  await loadFontForCanvas(preset);
+  const toDisplay = (value: string) => (preset.uppercase ? value.toUpperCase() : value);
+
   const canvas = document.createElement("canvas");
   canvas.width = width;
   canvas.height = height;
@@ -30,13 +33,14 @@ export async function renderSubtitleFrame(
   ctx.clearRect(0, 0, width, height);
 
   const fontSize = Math.max(12, Math.round((style.fontSize / 720) * height));
-  const weight = style.bold ? "700" : "400";
-  ctx.font = `${weight} ${fontSize}px Arial, Helvetica, sans-serif`;
+  const weight = style.bold ? "700" : preset.weight;
+  ctx.font = `${weight} ${fontSize}px ${preset.cssFamily}`;
   ctx.textAlign = "left";
   ctx.textBaseline = "middle";
 
   const maxWidth = width * 0.86;
-  const tokens = words && words.length > 0 ? words : text.split(/\s+/).filter(Boolean);
+  const rawTokens = words && words.length > 0 ? words : text.split(/\s+/).filter(Boolean);
+  const tokens = rawTokens.map(toDisplay);
   const lines = wrapTokens(ctx, tokens, maxWidth);
   const lineHeight = fontSize * 1.25;
   const blockHeight = lines.length * lineHeight;
@@ -83,7 +87,7 @@ export async function renderSubtitleFrame(
         ctx.strokeText(word, x, y);
       }
 
-      ctx.fillStyle = isActive ? HIGHLIGHT_COLOR : "#ffffff";
+      ctx.fillStyle = isActive ? preset.highlightColor : preset.color;
       ctx.fillText(word, x, y);
 
       x += ctx.measureText(word).width + spaceWidth;
