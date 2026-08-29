@@ -6,12 +6,19 @@ import {
   ASPECT_RATIO_VALUE,
   QUALITY_HEIGHT,
   type AiHighlightSuggestion,
+  type AspectRatio,
   type ClipConfig,
   type ClipResult,
+  type ExportFormat,
   type Highlight,
   type PipelineStage,
+  type Quality,
   type SubtitleCue,
+  type SubtitleStyle,
+  type WatermarkConfig,
 } from "./types";
+
+type Engine = Awaited<ReturnType<typeof getEngine>>;
 
 export interface PipelineCallbacks {
   onStage: (stage: PipelineStage, detail?: string) => void;
@@ -97,6 +104,54 @@ class Cancelled extends Error {
   }
 }
 
+interface SubtitleFrame {
+  fileName: string;
+  start: number;
+  end: number;
+}
+
+/** Renders every cue in a clip to PNG frames (karaoke word-by-word if enabled) and writes them to the engine's FS. */
+async function buildSubtitleFrames(
+  engine: Engine,
+  cues: SubtitleCue[],
+  filePrefix: string,
+  style: SubtitleStyle,
+  width: number,
+  height: number,
+): Promise<SubtitleFrame[]> {
+  const frames: SubtitleFrame[] = [];
+  for (let cueIndex = 0; cueIndex < cues.length; cueIndex += 1) {
+    const cue = cues[cueIndex];
+    if (!cue || cue.end <= cue.start) continue;
+
+    const words = cue.words;
+    if (style.highlightWords && words && words.length > 0) {
+      // Karaoke mode: one frame per word, each highlighting that word.
+      // A frame spans until the next word starts, so the highlight moves
+      // exactly when the next word is spoken (no gaps/flicker).
+      const wordTexts = words.map((w) => w.text);
+      for (let wordIndex = 0; wordIndex < words.length; wordIndex += 1) {
+        const word = words[wordIndex];
+        if (!word) continue;
+        const frameStart = wordIndex === 0 ? cue.start : Math.max(cue.start, word.start);
+        const nextWord = words[wordIndex + 1];
+        const frameEnd = nextWord ? Math.max(frameStart, Math.min(cue.end, nextWord.start)) : cue.end;
+        if (frameEnd <= frameStart) continue;
+        const png = await renderSubtitleFrame(cue.text, style, width, height, wordTexts, wordIndex);
+        const fileName = `${filePrefix}-${cueIndex}-${wordIndex}.png`;
+        await engine.writeFile(fileName, png);
+        frames.push({ fileName, start: frameStart, end: frameEnd });
+      }
+    } else {
+      const png = await renderSubtitleFrame(cue.text, style, width, height);
+      const fileName = `${filePrefix}-${cueIndex}.png`;
+      await engine.writeFile(fileName, png);
+      frames.push({ fileName, start: cue.start, end: cue.end });
+    }
+  }
+  return frames;
+}
+
 /** Full browser-side pipeline: analyze -> score -> cut -> style -> export. */
 export async function runPipeline(input: PipelineInput, callbacks: PipelineCallbacks): Promise<PipelineOutput> {
   const { file, config, duration } = input;
@@ -165,38 +220,10 @@ export async function runPipeline(input: PipelineInput, callbacks: PipelineCallb
     const clipCues = sliceCues(input.cues, highlight.start, highlight.end);
     const wantsSubtitles = config.subtitle.enabled && clipCues.length > 0 && !subtitleFailed;
 
-    const subtitleFrames: SubtitleFrame[] = [];
+    let subtitleFrames: SubtitleFrame[] = [];
     if (wantsSubtitles) {
       callbacks.onStage("subtitles", `Clip ${index + 1}`);
-      for (let cueIndex = 0; cueIndex < clipCues.length; cueIndex += 1) {
-        const cue = clipCues[cueIndex];
-        if (!cue || cue.end <= cue.start) continue;
-
-        const words = cue.words;
-        if (config.subtitle.highlightWords && words && words.length > 0) {
-          // Karaoke mode: one frame per word, each highlighting that word.
-          // A frame spans until the next word starts, so the highlight moves
-          // exactly when the next word is spoken (no gaps/flicker).
-          const wordTexts = words.map((w) => w.text);
-          for (let wordIndex = 0; wordIndex < words.length; wordIndex += 1) {
-            const word = words[wordIndex];
-            if (!word) continue;
-            const frameStart = wordIndex === 0 ? cue.start : Math.max(cue.start, word.start);
-            const nextWord = words[wordIndex + 1];
-            const frameEnd = nextWord ? Math.max(frameStart, Math.min(cue.end, nextWord.start)) : cue.end;
-            if (frameEnd <= frameStart) continue;
-            const png = await renderSubtitleFrame(cue.text, config.subtitle, width, height, wordTexts, wordIndex);
-            const fileName = `sub-${index}-${cueIndex}-${wordIndex}.png`;
-            await engine.writeFile(fileName, png);
-            subtitleFrames.push({ fileName, start: frameStart, end: frameEnd });
-          }
-        } else {
-          const png = await renderSubtitleFrame(cue.text, config.subtitle, width, height);
-          const fileName = `sub-${index}-${cueIndex}.png`;
-          await engine.writeFile(fileName, png);
-          subtitleFrames.push({ fileName, start: cue.start, end: cue.end });
-        }
-      }
+      subtitleFrames = await buildSubtitleFrames(engine, clipCues, `sub-${index}`, config.subtitle, width, height);
     }
 
     const output = `clip-${index + 1}.${EXT_ARGS[config.format].ext}`;
@@ -265,12 +292,6 @@ export async function runPipeline(input: PipelineInput, callbacks: PipelineCallb
   await engine.deleteFile("audio.wav").catch(() => undefined);
 
   return { clips, highlights, analysis: audio };
-}
-
-interface SubtitleFrame {
-  fileName: string;
-  start: number;
-  end: number;
 }
 
 interface ArgsInput {
@@ -403,4 +424,85 @@ function even(value: number): number {
 
 export function isCancellation(error: unknown): boolean {
   return error instanceof Cancelled;
+}
+
+export interface ReRenderClipInput {
+  /** The original full-length source video — required, since subtitles are
+   * baked into pixels and the only way to change them is to re-cut & re-burn. */
+  file: Blob;
+  /** Full-video-relative cues (the same transcript used for the original run). */
+  cues: SubtitleCue[];
+  start: number;
+  end: number;
+  aspect: AspectRatio;
+  quality: Quality;
+  format: ExportFormat;
+  fps: 30 | 60;
+  subtitle: SubtitleStyle;
+  watermark: WatermarkConfig;
+}
+
+/**
+ * Re-cuts and re-burns a single clip from the original source — used by the
+ * Editor to change subtitle font/style without re-running highlight detection
+ * or re-generating every clip from scratch.
+ */
+export async function reRenderClip(input: ReRenderClipInput): Promise<Blob> {
+  const engine = await getEngine();
+  const stamp = Date.now();
+  const inputName = `reclip-${stamp}.input`;
+  const bytes = new Uint8Array(await input.file.arrayBuffer());
+  await engine.writeFile(inputName, bytes);
+
+  const ratio = ASPECT_RATIO_VALUE[input.aspect];
+  const height = QUALITY_HEIGHT[input.quality];
+  const width = even(Math.round(height * ratio));
+
+  if (input.watermark.dataUrl) {
+    await engine.writeFile("logo.png", await dataUrlToBytes(input.watermark.dataUrl));
+  }
+
+  const clipCues = sliceCues(input.cues, input.start, input.end);
+  const subtitleFrames =
+    input.subtitle.enabled && clipCues.length > 0
+      ? await buildSubtitleFrames(engine, clipCues, `reclip-${stamp}-sub`, input.subtitle, width, height)
+      : [];
+
+  const config: ClipConfig = {
+    quality: input.quality,
+    clipLength: input.end - input.start,
+    clipCount: 1,
+    aspect: input.aspect,
+    subtitle: input.subtitle,
+    watermark: input.watermark,
+    format: input.format,
+    fps: input.fps,
+  };
+
+  const output = `reclip-${stamp}-output.${EXT_ARGS[input.format].ext}`;
+  try {
+    await engine.exec(
+      buildArgs({
+        inputName,
+        output,
+        start: input.start,
+        duration: input.end - input.start,
+        width,
+        height,
+        ratio,
+        config,
+        subtitleFrames,
+      }),
+    );
+    const data = (await engine.readFile(output)) as Uint8Array;
+    const copy = new Uint8Array(data.length);
+    copy.set(data);
+    return new Blob([copy], { type: mimeFor(input.format) });
+  } finally {
+    for (const frame of subtitleFrames) {
+      await engine.deleteFile(frame.fileName).catch(() => undefined);
+    }
+    await engine.deleteFile(output).catch(() => undefined);
+    await engine.deleteFile(inputName).catch(() => undefined);
+  }
 }
