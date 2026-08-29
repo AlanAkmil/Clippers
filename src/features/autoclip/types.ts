@@ -20,6 +20,8 @@ export interface SubtitleStyle {
   background: boolean;
   position: SubtitlePosition;
   highlightWords: boolean;
+  /** id referencing a preset in fonts.ts — defaults to "default" (Arial) when unset. */
+  fontFamily?: string;
 }
 
 export interface ClipConfig {
