@@ -77,10 +77,19 @@ export interface AiTranscribeResult {
   language: string | null;
 }
 
+export interface SubtitleWord {
+  text: string;
+  start: number;
+  end: number;
+}
+
 export interface SubtitleCue {
   start: number;
   end: number;
   text: string;
+  /** Per-word timing, used for karaoke-style word highlighting. Only present
+   * when the transcript came from the AI (Whisper word-level timestamps). */
+  words?: SubtitleWord[];
 }
 
 export type PipelineStage =
