@@ -3,7 +3,9 @@ import { scoreHighlightsAi, transcribeAudioAi, translateCuesAi } from "./ai.serv
 import type { AiHighlightSuggestion, AiTranscribeResult, SubtitleCue } from "./types";
 
 const MAX_AUDIO_BYTES = 24 * 1024 * 1024;
-const TRANSLATE_BATCH_SIZE = 30;
+const TRANSLATE_BATCH_SIZE = 15;
+const RATE_LIMIT_WAIT_MS = 21_000;
+const MAX_RETRIES = 4;
 
 export interface AiTranscribeCallbacks {
   onStage?: (label: string) => void;
@@ -65,6 +67,7 @@ export async function generateAiHighlights(
 /**
  * Translates every cue's text to `targetLanguage`, batched to stay under
  * Groq's free-tier tokens-per-minute limit. Timing is untouched — only text changes.
+ * Automatically waits & retries if a batch hits the rate limit.
  */
 export async function translateCues(
   cues: SubtitleCue[],
@@ -74,11 +77,27 @@ export async function translateCues(
   const results: SubtitleCue[] = [];
   for (let i = 0; i < cues.length; i += TRANSLATE_BATCH_SIZE) {
     const batch = cues.slice(i, i + TRANSLATE_BATCH_SIZE);
-    const translated = await translateCuesAi({ data: { cues: batch, targetLanguage } });
-    results.push(...translated);
+
+    let translated: SubtitleCue[] | null = null;
+    for (let attempt = 0; attempt <= MAX_RETRIES; attempt += 1) {
+      try {
+        translated = await translateCuesAi({ data: { cues: batch, targetLanguage } });
+        break;
+      } catch (error) {
+        const isRateLimit = error instanceof Error && /429|rate limit/i.test(error.message);
+        if (isRateLimit && attempt < MAX_RETRIES) {
+          onProgress?.(results.length, cues.length);
+          await sleep(RATE_LIMIT_WAIT_MS);
+          continue;
+        }
+        throw error;
+      }
+    }
+
+    results.push(...(translated ?? batch));
     onProgress?.(results.length, cues.length);
     if (i + TRANSLATE_BATCH_SIZE < cues.length) {
-      await sleep(400);
+      await sleep(800);
     }
   }
   return results;
