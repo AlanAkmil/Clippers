@@ -4,9 +4,14 @@ import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Slider } from "@/components/ui/slider";
-import { Download, Pause, Play, Redo2, Scissors, SkipBack, SkipForward, Trash2, Undo2 } from "lucide-react";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Download, Loader2, Pause, Play, Redo2, Scissors, SkipBack, SkipForward, Trash2, Undo2, Wand2 } from "lucide-react";
 import { useLiveProjects, downloadBlob } from "@/features/autoclip/useLibrary";
 import { formatBytes, formatDuration } from "@/features/autoclip/types";
+import { reRenderClip } from "@/features/autoclip/pipeline";
+import { SUBTITLE_FONTS } from "@/features/autoclip/fonts";
+import { useAutoClipStore } from "@/features/autoclip/store";
+import { db } from "@/lib/db";
 import type { ClipRecord } from "@/lib/db";
 
 export const Route = createFileRoute("/dashboard/editor")({
@@ -27,7 +32,7 @@ interface Trim {
 }
 
 function EditorPage() {
-  const { clips, loading } = useLiveProjects();
+  const { clips, loading, refresh } = useLiveProjects();
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [duration, setDuration] = useState(0);
   const [time, setTime] = useState(0);
@@ -36,7 +41,12 @@ function EditorPage() {
   const [trim, setTrim] = useState<Trim>({ start: 0, end: 0 });
   const [history, setHistory] = useState<Trim[]>([]);
   const [future, setFuture] = useState<Trim[]>([]);
+  const [fontId, setFontId] = useState("default");
+  const [applyingFont, setApplyingFont] = useState(false);
   const videoRef = useRef<HTMLVideoElement | null>(null);
+  const storeFile = useAutoClipStore((s) => s.file);
+  const storeCues = useAutoClipStore((s) => s.cues);
+  const storeConfig = useAutoClipStore((s) => s.config);
 
   const selected: ClipRecord | undefined = clips.find((clip) => clip.id === selectedId) ?? clips[0];
   const url = useObjectUrl(selected?.blob);
@@ -111,6 +121,37 @@ function EditorPage() {
       </div>
     );
   }
+
+  const applyFont = async () => {
+    if (!storeFile) {
+      toast.error(
+        "Video sumber aslinya udah gak ada di memori browser (biasanya abis reload halaman). Balik ke Auto Clip, generate ulang dulu di sesi yang sama biar font bisa diganti tanpa render dari nol.",
+      );
+      return;
+    }
+    setApplyingFont(true);
+    try {
+      const blob = await reRenderClip({
+        file: storeFile,
+        cues: storeCues,
+        start: selected.start,
+        end: selected.end,
+        aspect: selected.aspect,
+        quality: storeConfig.quality,
+        format: selected.format,
+        fps: storeConfig.fps,
+        subtitle: { ...storeConfig.subtitle, fontFamily: fontId },
+        watermark: storeConfig.watermark,
+      });
+      await db().clips.update(selected.id, { blob, size: blob.size });
+      await refresh();
+      toast.success("Font subtitle udah diganti");
+    } catch (cause) {
+      toast.error(cause instanceof Error ? cause.message : "Gagal render ulang klip.");
+    } finally {
+      setApplyingFont(false);
+    }
+  };
 
   const effectiveEnd = trim.end || duration;
 
@@ -243,6 +284,34 @@ function EditorPage() {
             <Button className="rounded-full" onClick={() => downloadBlob(selected.blob, selected.name)}>
               <Download className="size-4" /> Download clip
             </Button>
+          </div>
+
+          <div className="mt-4 flex flex-wrap items-center gap-2 rounded-2xl bg-secondary/40 p-3">
+            <Select value={fontId} onValueChange={setFontId}>
+              <SelectTrigger className="h-9 w-44 rounded-full text-xs">
+                <SelectValue placeholder="Font subtitle" />
+              </SelectTrigger>
+              <SelectContent>
+                {SUBTITLE_FONTS.map((preset) => (
+                  <SelectItem key={preset.id} value={preset.id}>
+                    {preset.label}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            <Button
+              variant="outline"
+              size="sm"
+              className="rounded-full"
+              onClick={applyFont}
+              disabled={applyingFont}
+            >
+              {applyingFont ? <Loader2 className="size-4 animate-spin" /> : <Wand2 className="size-4" />}
+              {applyingFont ? "Render ulang…" : "Terapkan font"}
+            </Button>
+            <p className="w-full text-[11px] text-muted-foreground">
+              Render ulang cuma klip ini (subtitle di-burn ulang dari video asli), gak perlu generate semua dari awal.
+            </p>
           </div>
         </div>
 
