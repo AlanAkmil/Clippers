@@ -1,7 +1,7 @@
 import { getEngine } from "./engine";
 import { analyzeAudio, analyzeMotion, detectHighlights, type AudioAnalysis } from "./analysis";
 import { sliceCues } from "./subtitles";
-import { renderSubtitleFrame } from "./subtitle-image";
+import { renderBlankFrame, renderSubtitleFrame } from "./subtitle-image";
 import {
   ASPECT_RATIO_VALUE,
   QUALITY_HEIGHT,
@@ -106,20 +106,31 @@ class Cancelled extends Error {
 
 interface SubtitleFrame {
   fileName: string;
-  start: number;
-  end: number;
+  duration: number;
 }
 
-/** Renders every cue in a clip to PNG frames (karaoke word-by-word if enabled) and writes them to the engine's FS. */
-async function buildSubtitleFrames(
+/**
+ * Renders every cue's subtitle content to PNGs (karaoke word-by-word if
+ * enabled), then assembles them plus blank filler segments into ONE
+ * gap-free track spanning [0, clipDuration) — including `leadingBlank`
+ * seconds up front to line up with the base video's seek preroll.
+ *
+ * A single concatenated track means ffmpeg only has to do ONE overlay pass
+ * per frame, instead of one pass per word/cue — this is the difference
+ * between a clip rendering in seconds vs. minutes on a busy transcript.
+ */
+async function buildSubtitleTrack(
   engine: Engine,
   cues: SubtitleCue[],
   filePrefix: string,
   style: SubtitleStyle,
   width: number,
   height: number,
+  clipDuration: number,
+  leadingBlank: number,
 ): Promise<SubtitleFrame[]> {
-  const frames: SubtitleFrame[] = [];
+  const raw: { fileName: string; start: number; end: number }[] = [];
+
   for (let cueIndex = 0; cueIndex < cues.length; cueIndex += 1) {
     const cue = cues[cueIndex];
     if (!cue || cue.end <= cue.start) continue;
@@ -140,16 +151,47 @@ async function buildSubtitleFrames(
         const png = await renderSubtitleFrame(cue.text, style, width, height, wordTexts, wordIndex);
         const fileName = `${filePrefix}-${cueIndex}-${wordIndex}.png`;
         await engine.writeFile(fileName, png);
-        frames.push({ fileName, start: frameStart, end: frameEnd });
+        raw.push({ fileName, start: frameStart, end: frameEnd });
       }
     } else {
       const png = await renderSubtitleFrame(cue.text, style, width, height);
       const fileName = `${filePrefix}-${cueIndex}.png`;
       await engine.writeFile(fileName, png);
-      frames.push({ fileName, start: cue.start, end: cue.end });
+      raw.push({ fileName, start: cue.start, end: cue.end });
     }
   }
-  return frames;
+
+  raw.sort((a, b) => a.start - b.start);
+
+  const blankName = `${filePrefix}-blank.png`;
+  let blankWritten = false;
+  const ensureBlank = async () => {
+    if (blankWritten) return;
+    await engine.writeFile(blankName, await renderBlankFrame(width, height));
+    blankWritten = true;
+  };
+
+  const track: SubtitleFrame[] = [];
+  if (leadingBlank > 0.001) {
+    await ensureBlank();
+    track.push({ fileName: blankName, duration: leadingBlank });
+  }
+
+  let cursor = 0;
+  for (const frame of raw) {
+    if (frame.start > cursor + 0.001) {
+      await ensureBlank();
+      track.push({ fileName: blankName, duration: frame.start - cursor });
+    }
+    track.push({ fileName: frame.fileName, duration: Math.max(0.001, frame.end - frame.start) });
+    cursor = Math.max(cursor, frame.end);
+  }
+  if (clipDuration > cursor + 0.001) {
+    await ensureBlank();
+    track.push({ fileName: blankName, duration: clipDuration - cursor });
+  }
+
+  return track;
 }
 
 /** Full browser-side pipeline: analyze -> score -> cut -> style -> export. */
@@ -220,17 +262,29 @@ export async function runPipeline(input: PipelineInput, callbacks: PipelineCallb
     const clipCues = sliceCues(input.cues, highlight.start, highlight.end);
     const wantsSubtitles = config.subtitle.enabled && clipCues.length > 0 && !subtitleFailed;
 
-    let subtitleFrames: SubtitleFrame[] = [];
+    let subtitleTrack: SubtitleFrame[] = [];
     if (wantsSubtitles) {
       callbacks.onStage("subtitles", `Clip ${index + 1}`);
-      subtitleFrames = await buildSubtitleFrames(engine, clipCues, `sub-${index}`, config.subtitle, width, height);
+      const clipDuration = highlight.end - highlight.start;
+      const coarse = Math.max(0, highlight.start - SEEK_PREROLL);
+      const leadingBlank = highlight.start - coarse;
+      subtitleTrack = await buildSubtitleTrack(
+        engine,
+        clipCues,
+        `sub-${index}`,
+        config.subtitle,
+        width,
+        height,
+        clipDuration,
+        leadingBlank,
+      );
     }
 
     const output = `clip-${index + 1}.${EXT_ARGS[config.format].ext}`;
     let blob: Blob | null = null;
 
-    const attempts: SubtitleFrame[][] = subtitleFrames.length > 0 ? [subtitleFrames, []] : [[]];
-    for (const frames of attempts) {
+    const attempts: SubtitleFrame[][] = subtitleTrack.length > 0 ? [subtitleTrack, []] : [[]];
+    for (const track of attempts) {
       try {
         await engine.exec(
           buildArgs({
@@ -242,7 +296,7 @@ export async function runPipeline(input: PipelineInput, callbacks: PipelineCallb
             height,
             ratio,
             config,
-            subtitleFrames: frames,
+            subtitleTrack: track,
           }),
         );
         const data = (await engine.readFile(output)) as Uint8Array;
@@ -251,7 +305,7 @@ export async function runPipeline(input: PipelineInput, callbacks: PipelineCallb
         blob = new Blob([copy], { type: mimeFor(config.format) });
         break;
       } catch (error) {
-        if (frames.length > 0) {
+        if (track.length > 0) {
           subtitleFailed = true;
           callbacks.onWarning?.("Subtitle burn-in gagal — klip diexport tanpa subtitle.");
           continue;
@@ -260,7 +314,7 @@ export async function runPipeline(input: PipelineInput, callbacks: PipelineCallb
       }
     }
 
-    for (const frame of subtitleFrames) {
+    for (const frame of subtitleTrack) {
       await engine.deleteFile(frame.fileName).catch(() => undefined);
     }
 
@@ -303,7 +357,7 @@ interface ArgsInput {
   height: number;
   ratio: number;
   config: ClipConfig;
-  subtitleFrames: SubtitleFrame[];
+  subtitleTrack: SubtitleFrame[];
 }
 
 function buildArgs({
@@ -315,7 +369,7 @@ function buildArgs({
   height,
   ratio,
   config,
-  subtitleFrames,
+  subtitleTrack,
 }: ArgsInput): string[] {
   const fps = config.format === "gif" ? 12 : config.fps;
   // Drop frames first so crop/scale only run on frames we actually keep.
@@ -338,14 +392,14 @@ function buildArgs({
     watermarkIndex = nextInputIndex;
     nextInputIndex += 1;
   }
-  const subtitleIndices: number[] = [];
-  for (const frame of subtitleFrames) {
-    args.push("-loop", "1", "-t", duration.toFixed(3), "-i", frame.fileName);
-    subtitleIndices.push(nextInputIndex);
+  const trackIndices: number[] = [];
+  for (const segment of subtitleTrack) {
+    args.push("-loop", "1", "-t", segment.duration.toFixed(3), "-i", segment.fileName);
+    trackIndices.push(nextInputIndex);
     nextInputIndex += 1;
   }
 
-  const needsFilterComplex = Boolean(watermark.dataUrl) || subtitleFrames.length > 0;
+  const needsFilterComplex = Boolean(watermark.dataUrl) || subtitleTrack.length > 0;
   if (needsFilterComplex) {
     const parts: string[] = [`[0:v]${chain.join(",")}[base]`];
     let current = "base";
@@ -361,19 +415,19 @@ function buildArgs({
       current = "vwm";
     }
 
-    subtitleFrames.forEach((frame, position) => {
-      const idx = subtitleIndices[position];
-      const label = `vsub${position}`;
-      // The base video's filtergraph timeline still includes the seek preroll
-      // (it's only trimmed away by the output-side `-ss fine` below, which runs
-      // after this filter_complex), so cue times need the same offset here.
-      const cueStart = frame.start + fine;
-      const cueEnd = frame.end + fine;
-      parts.push(
-        `[${current}][${idx}:v]overlay=0:0:enable='between(t,${cueStart.toFixed(3)},${cueEnd.toFixed(3)})'[${label}]`,
-      );
-      current = label;
-    });
+    // One pre-composited track means ONE overlay pass total, no matter how
+    // many words/cues it contains — chaining N overlay stages (one per word)
+    // used to make ffmpeg re-evaluate every stage on every frame, which got
+    // brutally slow on word-dense transcripts.
+    if (trackIndices.length === 1) {
+      parts.push(`[${current}][${trackIndices[0]}:v]overlay=0:0[vsub]`);
+      current = "vsub";
+    } else if (trackIndices.length > 1) {
+      const refs = trackIndices.map((idx) => `[${idx}:v]`).join("");
+      parts.push(`${refs}concat=n=${trackIndices.length}:v=1:a=0[subtrack]`);
+      parts.push(`[${current}][subtrack]overlay=0:0[vsub]`);
+      current = "vsub";
+    }
 
     args.push("-filter_complex", parts.join(";"), "-map", `[${current}]`);
     if (config.format !== "gif") args.push("-map", "0:a?");
@@ -463,9 +517,12 @@ export async function reRenderClip(input: ReRenderClipInput): Promise<Blob> {
   }
 
   const clipCues = sliceCues(input.cues, input.start, input.end);
-  const subtitleFrames =
+  const clipDuration = input.end - input.start;
+  const coarse = Math.max(0, input.start - SEEK_PREROLL);
+  const leadingBlank = input.start - coarse;
+  const subtitleTrack =
     input.subtitle.enabled && clipCues.length > 0
-      ? await buildSubtitleFrames(engine, clipCues, `reclip-${stamp}-sub`, input.subtitle, width, height)
+      ? await buildSubtitleTrack(engine, clipCues, `reclip-${stamp}-sub`, input.subtitle, width, height, clipDuration, leadingBlank)
       : [];
 
   const config: ClipConfig = {
@@ -491,7 +548,7 @@ export async function reRenderClip(input: ReRenderClipInput): Promise<Blob> {
         height,
         ratio,
         config,
-        subtitleFrames,
+        subtitleTrack,
       }),
     );
     const data = (await engine.readFile(output)) as Uint8Array;
@@ -499,7 +556,7 @@ export async function reRenderClip(input: ReRenderClipInput): Promise<Blob> {
     copy.set(data);
     return new Blob([copy], { type: mimeFor(input.format) });
   } finally {
-    for (const frame of subtitleFrames) {
+    for (const frame of subtitleTrack) {
       await engine.deleteFile(frame.fileName).catch(() => undefined);
     }
     await engine.deleteFile(output).catch(() => undefined);
