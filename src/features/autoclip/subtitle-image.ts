@@ -105,6 +105,23 @@ export async function renderSubtitleFrame(
   return new Uint8Array(await blob.arrayBuffer());
 }
 
+/** Renders a fully transparent PNG, used to fill gaps in the subtitle track. */
+export async function renderBlankFrame(width: number, height: number): Promise<Uint8Array> {
+  const canvas = document.createElement("canvas");
+  canvas.width = width;
+  canvas.height = height;
+  const ctx = canvas.getContext("2d");
+  if (!ctx) throw new Error("Canvas 2D context tidak tersedia di browser ini.");
+  ctx.clearRect(0, 0, width, height);
+  const blob: Blob = await new Promise((resolve, reject) => {
+    canvas.toBlob((result) => {
+      if (result) resolve(result);
+      else reject(new Error("Gagal me-render blank frame."));
+    }, "image/png");
+  });
+  return new Uint8Array(await blob.arrayBuffer());
+}
+
 function wrapTokens(ctx: CanvasRenderingContext2D, tokens: string[], maxWidth: number): string[][] {
   const spaceWidth = ctx.measureText(" ").width;
   const lines: string[][] = [];
